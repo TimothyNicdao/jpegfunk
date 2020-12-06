@@ -1,6 +1,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <jpeglib.h>
+#include <omp.h> 
+#include <sys/time.h>
 
 #define MIN(x,y) (((x) < (y)) ? (x) : (y))
 #define MAX(x,y) (((x) > (y)) ? (x) : (y))
@@ -201,24 +203,47 @@ unsigned char compute_pixel_value(struct rgb_image *input_image, int row, int co
  */
 void apply_filter(struct rgb_image *input_image, struct rgb_image *output_image) {
     int row, col, rgb;
+    struct timeval start, end;
 
-    for (row = 0; row < input_image->height; row++) {
-        for (col = 0; col < input_image->width; col++) {
-            for (rgb = 0; rgb < 3; rgb++) {
-                output_image->RGB[rgb][row * input_image->width + col] =
-                        compute_pixel_value(input_image, row, col, rgb);
+    #pragma omp parallel shared(input_image, output_image) private(row,col,rgb,start,end) 
+    { 
+       gettimeofday(&start, NULL);
+       #pragma omp for nowait schedule(dynamic)
+            for (row = 0; row < input_image->height; row++) {
+                for (col = 0; col < input_image->width; col++) {
+                    for (rgb = 0; rgb < 3; rgb++) {
+                        output_image->RGB[rgb][row * input_image->width + col] =
+                                compute_pixel_value(input_image, row, col, rgb);
+                    }
+                }
             }
-        }
+
+        gettimeofday(&end, NULL);
+        printf("Thread (%d/%d) total time: %.2lf\n",
+              omp_get_thread_num(),
+              omp_get_num_threads(),
+              ((1000000.0 * (end.tv_sec - start.tv_sec) +
+              (1.0 * (end.tv_usec - start.tv_usec)))/1000000.0));
+
     }
 }
 
 
 int main(int argc, char **argv) {
+    int num_threads;
 
     /** Parse Command-Line Arguments **/
-    if (argc != 3) {
-        fprintf(stderr, "Usage: %s <input jpg file path> <output jpg file path>\n", argv[0]);
+    if (argc != 4) {
+        fprintf(stderr, "Usage: %s <input jpg file path> <output jpg file path> <number of threads> \n", argv[0]);
         exit(1);
+    }   
+
+    num_threads = atoi(argv[3]);
+
+    if (num_threads < 0){
+       fprintf(stderr, "Usage: %s <input jpg file path> <output jpg file path> <number of threads> \n", argv[0]);
+       fprintf(stderr, "The number of threads must be greater than 0 \n");
+       exit(1);
     }
 
     /** Read Input Image into RAM **/
@@ -227,9 +252,18 @@ int main(int argc, char **argv) {
     /** Create Output Image in RAM **/
     struct rgb_image *output_image = create_output_image(input_image);
 
+    struct timeval start, end;
+    gettimeofday(&start, NULL);
+
+    omp_set_num_threads(num_threads);
+
     /** Apply Filter **/
     apply_filter(input_image, output_image);
 
+    gettimeofday(&end, NULL);
+    printf("Total elapsed: %.2lf\n",
+          ((1000000.0 * (end.tv_sec - start.tv_sec) +
+          (1.0 * (end.tv_usec - start.tv_usec)))/1000000.0));
     /** Save Output Image **/
     write_output_image(output_image, argv[2]);
 
